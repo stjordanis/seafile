@@ -221,6 +221,14 @@ def must_copytree(src, dst):
     except Exception, e:
         error('failed to copy %s to %s: %s' % (src, dst, e))
 
+def must_rmtree(path):
+    '''Recurse rm dir, exit on failure'''
+    try:
+        shutil.rmtree(path)
+    except Exception as e:
+        error('failed rm dir %s : %s' % (path, e))
+
+
 class Project(object):
     '''Base class for a project'''
     # Probject name, i.e. libseaprc/seafile/
@@ -758,6 +766,33 @@ def change_rpaths():
 
 DROPDMG = '/Applications/DropDMG.app/Contents/Frameworks/DropDMGFramework.framework/Versions/A/dropdmg'
 
+def run(cmdline, cwd=None, env=None, suppress_stdout=False, suppress_stderr=False):
+    '''Specify a command line string'''
+    info('running %s, cwd=%s' % (cmdline, cwd if cwd else os.getcwd()))
+    with open(os.devnull, 'w') as devnull:
+        if suppress_stdout:
+            stdout = devnull
+        else:
+            stdout = sys.stdout
+
+        if suppress_stderr:
+            stderr = devnull
+        else:
+            stderr = sys.stderr
+
+        proc = subprocess.Popen(cmdline,
+                                cwd=cwd,
+                                stdout=stdout,
+                                stderr=stderr,
+                                env=env,
+                                shell=True)
+        ret = proc.wait()
+        if ret != 0:
+            global error_exit
+            error_exit = True
+        return ret
+
+
 def gen_dmg():
     output_dmg = 'app-{}.dmg'.format(conf[CONF_VERSION])
     parentdir = 'app-{}'.format(conf[CONF_VERSION])
@@ -788,8 +823,33 @@ def gen_dmg():
         must_run('rm -rf "{}"'.format(join(app_plugins_dir, 'bearer')))
         # fsplugin must be copied before we sign the final .app dir
         copy_fsplugin(app_plugins_dir)
-        sign_files(appdir)
+ 
+        app_framework_dir= join(appdir, 'Contents', 'Frameworks')
+        webenginecore_framework_path = join(app_framework_dir, 'QtWebEngineCore.framework')
+        must_rmtree(webenginecore_framework_path)
+        # Copy webengineCore framework from qt lib 
+        qt_webenginecore_framework_path = "/Users/vagrant/Qt/5.15.1/clang_64/lib/QtWebEngineCore.framework"
 
+        must_copytree(qt_webenginecore_framework_path, webenginecore_framework_path)
+        must_rmtree(join(webenginecore_framework_path, 'Versions', '5', 'Headers'))
+        must_rmtree(join(webenginecore_framework_path, 'Headers'))
+        must_rmtree(join(webenginecore_framework_path, 'Versions', 'Current'))
+
+        soft_link = os.path.join(webenginecore_framework_path, 'Versions')
+        current_version_5 = os.path.join(webenginecore_framework_path, 'Versions', '5')
+
+        run('ln -s Current'.format(current_version_5), soft_link)
+
+        must_rmtree(join(webenginecore_framework_path, 'Helpers'))
+        must_rmtree(join(webenginecore_framework_path, 'QtWebEngineCore'))
+        must_rmtree(join(webenginecore_framework_path, 'Resources'))
+
+        run('ln -s Versions/Current/Helpers {}'.format(join(webenginecore_framework_path, 'Helpers')), webenginecore_framework_path)
+        run('ln -s Versions/Current/QtWebEngineCore {}'.format(join(webenginecore_framework_path, 'QtWebEngineCore')), webenginecore_framework_path)
+        run('ln -s Versions/Current/Resources {}'.format(join(webenginecore_framework_path, 'Resources')), webenginecore_framework_path)
+        
+
+        sign_files(appdir)
         # Rename the .app dir to 'Seafile Client.app', and create the shortcut
         # to '/Applications' so the user can drag into it when opening the DMG.
         brand = conf.get(CONF_BRAND, '')
